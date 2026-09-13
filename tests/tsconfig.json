@@ -11,5 +11,5 @@
     "incremental": false,
     "types": ["node"]
   },
-  "include": ["domain.test.ts", "../src/**/*.ts", "../types/**/*.ts"]
+  "include": ["*.test.ts", "../src/**/*.ts", "../types/**/*.ts"]
 }

@@ -27,6 +27,7 @@ export interface Resource {
   contentType: string;
   author: string;
   authorBadge?: string;
+  authorBadgeText?: string;
   authorityLevel?: string;
   rankingScore?: number;
   voteUpCount: number;

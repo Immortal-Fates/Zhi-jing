@@ -6,6 +6,8 @@
 
 文档、接口契约和 mock 约定已准备好；应用功能仍按 `docs/prd.md` 分阶段实现。当前已迁移到 Next.js App Router，服务只提供基础健康检查和脚手架首页。
 
+领域模型、大纲校验和知乎服务端适配层已实现，尚未接入业务路由或地图页面。
+
 ## 开发环境
 
 - Node.js `>=22`
@@ -34,6 +36,24 @@ npm start
 3. 不把真实凭证写入 `.env.example`、源码、日志或提交记录。
 
 `zhihu-cli` 保存的系统钥匙串凭证不会自动注入 Node 服务。需要服务端调用时，使用运行环境的 `ZHIHU_ACCESS_SECRET`。
+
+## 知乎适配层
+
+入口：`src/server/zhihu-adapter.ts`，仅供 Node 服务端使用，不在 Client Component 中导入。
+
+- `createZhihuClient()` 默认使用 mock，无凭证也不会发起网络请求。
+- `search(query, count?)` 返回映射后的 `resources`，默认数量 10、最大 10。
+- `answer(prompt)` 使用 `zhida-fast-1p5` 和 `stream: false`，提取内容、解析 JSON 后交给 `validateOutline` 严格校验。
+- `parseAnswerJson(text)` 是纯解析函数，支持纯 JSON 和完整 JSON 代码块，返回 `unknown`，不修复业务结构。
+- `ZhihuAdapterError.apiError` 包含 `code`、`message`、`retryable`；JSON 序列化为 `{ ok: false, error }`。
+
+真实模式从服务端环境变量读取 `ZHIHU_ACCESS_SECRET`、`ZHIHU_API_BASE_URL`。基地址默认 `https://developer.zhihu.com`；覆盖地址必须是受信任的 HTTP(S) 服务，不得来自浏览器输入。`ZHIJING_MOCK_MODE=true` 强制禁止真实请求，客户端选项不能关闭这一保护。超时默认搜索 10 秒、直答 120 秒，可用 `ZHIJING_SEARCH_TIMEOUT_MS`、`ZHIJING_OUTLINE_TIMEOUT_MS` 配置。
+
+mock 复用 `fixtures/`，客户端选项 `mockScenario` 支持 `default`、`empty`、`invalid_json`、`timeout`、`rate_limited`、`quota_exhausted`、`unauthorized`。`empty` 只影响搜索；其他错误场景可用于两种调用。测试注入本地 fetch 替身和虚构凭证，不调用知乎、不读取系统钥匙串。
+
+搜索仅复制资源元数据的白名单字段，忽略未知字段；必要字段缺失返回 `UPSTREAM_ERROR`，不伪装为空结果。`authorBadge` 为认证图片，`authorBadgeText` 为认证文案；图片缺失可省略。保持上游资源顺序和 `rankingScore`，`score` 初始化为 0，相关性过滤、综合评分和 top3 选择由后续业务层负责。摘要仅作为文本数据，不在适配层抓取或保存文章全文。
+
+适配层不自动重试、不跟随重定向、不缓存请求，也不创建 SSE、数据库或业务路由。
 
 ## 文档入口
 
