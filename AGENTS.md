@@ -23,13 +23,31 @@ When spawning a worker, assign a disjoint file or module ownership boundary. Use
 ## Required Workflow
 
 1. Read this file, the relevant product documents, source files, and tests.
-2. Astra writes the implementation plan and identifies dependencies and risks.
-3. Astra defines request and response schemas before implementation begins.
-4. Astra writes the task prompts, including ownership, acceptance criteria, and verification commands.
-5. Astra dispatches independent tasks to GLM-5 and DeepSeek-V4-Flash in parallel when their write sets do not overlap.
-6. Astra inspects worker diffs, resolves integration issues, and runs the project checks.
-7. Astra performs a final review for correctness, security, regressions, scope, and test coverage.
-8. Do not declare completion until the relevant checks pass and the final diff has been reviewed.
+2. Before editing, check the current branch, worktree, and remote status.
+3. If the worktree is not clean, stop and report the existing changes; do not reset, discard, or overwrite them.
+4. Create and switch to a dedicated feature branch before implementation. Use the pattern `feat/<short-task-name>`.
+5. Astra writes the implementation plan and identifies dependencies and risks.
+6. Astra defines request and response schemas before implementation begins.
+7. Astra writes the task prompts, including branch name, ownership, acceptance criteria, and verification commands.
+8. Astra dispatches independent tasks to GLM-5 and DeepSeek-V4-Flash in parallel when their write sets do not overlap.
+9. Astra inspects worker diffs, resolves integration issues, and runs the project checks.
+10. Astra performs a final review for correctness, security, regressions, scope, and test coverage.
+11. Do not declare completion until the relevant checks pass and the final diff has been reviewed.
+
+## Git Branch Workflow
+
+- Every independent implementation task must use its own branch created from the latest `main`.
+- Do not implement directly on `main`.
+- Do not create multiple workers that edit the same files or share the same feature branch.
+- A task branch should use a specific name such as `feat/foundation`, `feat/contracts`, or `feat/map-ui`.
+- Before creating a branch, run `git fetch origin` and update the local base only when the worktree is clean.
+- Never use `git reset --hard`, `git checkout --`, or broad deletion commands to resolve worktree or merge issues.
+- The task owner may commit completed work to its task branch after verification.
+- Task branches must not be pushed or merged automatically unless the user explicitly requests it.
+- The controller owns integration and should merge task branches into `main` in dependency order.
+- After each merge, run `npm test` and `npm run check`; when server code changes, start the server and verify `/api/health`.
+- If a merge conflict occurs, stop and report the conflicting files and the proposed resolution. Do not silently choose one side.
+- Push `main` only after the integrated changes pass the final review and the user explicitly requests the push.
 
 ## Worker Contract
 
