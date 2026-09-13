@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-文档、接口契约和 mock 约定已准备好；应用功能仍按 `docs/prd.md` 分阶段实现。当前服务只提供基础健康检查和静态首页。
+文档、接口契约和 mock 约定已准备好；应用功能仍按 `docs/prd.md` 分阶段实现。当前已迁移到 Next.js App Router，服务只提供基础健康检查和脚手架首页。
 
 ## 开发环境
 
@@ -19,6 +19,7 @@ npm install
 cp .env.example .env.local
 npm test
 npm run check
+npm run build
 npm start
 ```
 
@@ -54,6 +55,7 @@ npm start
 ```bash
 npm test
 npm run check
+npm run build
 npm start
 ```
 

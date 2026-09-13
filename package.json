@@ -1,12 +1,31 @@
 {
-  "name": "zhihu-hackathon-hello-world",
+  "name": "zhijing",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.mjs",
-    "check": "node --check server.mjs",
+    "dev": "next dev -H 127.0.0.1 -p 4173",
+    "start": "next start -H 127.0.0.1 -p 4173",
+    "build": "next build",
+    "check": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.11.6",
+    "framer-motion": "^13.2.0",
+    "next": "^16.3.5",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^22.20.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2"
+  }
 }
