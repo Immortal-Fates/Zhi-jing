@@ -167,6 +167,14 @@ data: {"mapId":"map_x","mockMode":true,"error":{"code":"NOT_LEARNABLE","message"
 - SSE `id` 将 `mapId`、事件名、`nodeId或global` 分别 JSON 字符串编码后再 URL 编码，以冒号连接；这样也能安全处理未配对 Unicode 代理字符。在缓存回放时不变；客户端以生成 ID 隔离，并按 nodeId 替换更新，不追加重复节点。
 - `Last-Event-ID` 不作为断点游标；同话题重连会回放当前任务/缓存，客户端必须幂等处理。过期后收到新 mapId 时应替换旧生成视图。
 
+### 前端订阅与重试
+
+- 前端通过 fetch POST 订阅，网络块不等于事件。增量 UTF-8 解码后按 LF/CRLF/CR 行处理，空行才派发完整事件，多行 data 按换行连接。EOF 前未闭合的事件不得作为完整事件使用，无终止事件的断开显示重新加载提示。
+- 每次订阅独立客户端序号，再结合 mapId 防旧响应污染；缓存可能重用 mapId，不能仅依赖 mapId 判断当前请求。
+- `POST /api/resources` 没有 mapId，前端捕获订阅序号、mapId、nodeId 后匹配重试结果，并校验 mockMode。重试不写回服务器缓存，原始 complete.status 不因重试而更改。
+- 节点重试只更新当前显示的数据；原始 partial 提示保留，并显示当前剩余失败数。空结果是正常 empty，不显示接口失败。
+- 页面“重新加载”不绕过缓存；快捷入口同样使用 `/api/generate`，未命中即生成，不承诺预生成内容。
+
 ## 5. 知乎外部 API
 
 参考项目级官方 Skill 的 `references/http-api.md`，不要把外部响应直接暴露给浏览器。
