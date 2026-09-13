@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev -H 127.0.0.1 -p 4173",
-    "start": "next start -H 127.0.0.1 -p 4173",
+    "start": "HOSTNAME=0.0.0.0 PORT=${PORT:-4173} node .next/standalone/server.js",
     "build": "next build",
     "check": "tsc --noEmit",
     "test": "npm run test:compile && node --test dist/test/tests/*.test.js tests/*.test.mjs",

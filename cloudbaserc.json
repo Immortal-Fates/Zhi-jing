@@ -1,0 +1,14 @@
+{
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
+  "envId": "zhi-jing-env-d9gwxqrib0722cd9a",
+  "region": "ap-shanghai",
+  "app": {
+    "serviceName": "zhijing",
+    "framework": "next",
+    "installCommand": "npm install",
+    "buildCommand": "npm run build"
+  },
+  "cloudrun": {
+    "name": "zhijing"
+  }
+}

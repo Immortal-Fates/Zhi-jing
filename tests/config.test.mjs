@@ -15,6 +15,16 @@ test('basic template excludes OAuth configuration', async () => {
 test('foundation exposes the required project scripts', async () => {
   const packageJson = JSON.parse(await readFile(new URL('package.json', root), 'utf8'));
   assert.equal(packageJson.scripts.build, 'next build');
-  assert.equal(packageJson.scripts.start, 'next start -H 127.0.0.1 -p 4173');
+  assert.equal(packageJson.scripts.start, 'HOSTNAME=0.0.0.0 PORT=${PORT:-4173} node .next/standalone/server.js');
   assert.equal(packageJson.scripts.check, 'tsc --noEmit');
+});
+
+test('production configuration uses standalone output and disables mock in the container', async () => {
+  const dockerfile = await readFile(new URL('Dockerfile', root), 'utf8');
+  const nextConfig = await readFile(new URL('next.config.ts', root), 'utf8');
+  assert.match(dockerfile, /ENV ZHIJING_MOCK_MODE=false/);
+  assert.match(dockerfile, /CMD \["node", "server\.js"\]/);
+  assert.match(nextConfig, /output:\s*'standalone'/);
+  assert.match(nextConfig, /X-Frame-Options/);
+  assert.match(nextConfig, /Content-Security-Policy/);
 });

@@ -37,6 +37,29 @@ npm start
 
 `zhihu-cli` 保存的系统钥匙串凭证不会自动注入 Node 服务。需要服务端调用时，使用运行环境的 `ZHIHU_ACCESS_SECRET`。
 
+## CloudBase App 云托管
+
+部署配置位于 `cloudbaserc.json`，目标环境为 `zhi-jing-env-d9gwxqrib0722cd9a`，服务名称为 `zhijing`。
+
+首次部署后，在 CloudBase 控制台打开该应用的“服务详情 → 服务设置 → 版本管理 → 新建版本”，添加以下服务端环境变量，再发布新版本：
+
+```text
+ZHIHU_ACCESS_SECRET=<知乎数据开放平台 Access Secret>
+ZHIJING_MOCK_MODE=false
+ZHIHU_API_BASE_URL=https://developer.zhihu.com
+ZHIJING_MAP_TTL_SECONDS=86400
+ZHIJING_SEARCH_CONCURRENCY=5
+ZHIJING_GENERATION_TIMEOUT_MS=180000
+```
+
+不要把 `ZHIHU_ACCESS_SECRET` 写入 `cloudbaserc.json`、`.env.example`、源码或日志。`NEXT_PUBLIC_` 前缀变量会暴露给浏览器，Access Secret 不得使用该前缀。
+
+本项目包含 `Dockerfile`，生产部署使用 CloudBase Run 容器模式，以保留 Next.js API Routes 和 SSE；不要使用静态托管模式。
+
+生产容器默认设置 `NODE_ENV=production`、`HOSTNAME=0.0.0.0`、`PORT=8080` 和 `ZHIJING_MOCK_MODE=false`。`npm start` 与容器均运行 Next standalone server。真实模式缺少 `ZHIHU_ACCESS_SECRET` 时，知乎调用会返回脱敏的 `UPSTREAM_AUTH`，不会回退到 mock。Secret 只能在 CloudBase 服务端环境变量/Secret 配置中注入，发布日志、构建参数和客户端环境变量均不得包含它。
+
+当前仓库未配置 CloudBase CLI 或部署凭证。完成线上发布前需要在 CloudBase 控制台或受信任的部署环境中配置 `ZHIHU_ACCESS_SECRET`，再执行容器发布；没有该凭证时只能完成本地和容器构建检查，不能声称已有公开地址。
+
 ## 知乎适配层
 
 入口：`src/server/zhihu-adapter.ts`，仅供 Node 服务端使用，不在 Client Component 中导入。
@@ -77,6 +100,18 @@ curl 'http://127.0.0.1:4173/api/map?topic=%E5%BE%AE%E7%A7%AF%E5%88%86'
 mapId 是生成版本，progressScope 是稳定学习话题作用域，不能用前者代替 localStorage 进度 ID。完整请求/响应、SSE 终止语义与限制见 `docs/api-contract.md`。
 
 本阶段无数据库、全局额度计数或登录。资源相关性过滤是有限规则，需后续人工验证真实内容质量；未进行真实知乎 API 验收或生产部署。
+
+## 生产检查
+
+```bash
+npm test
+npm run check
+npm run build
+npm start
+curl -fsS http://127.0.0.1:4173/api/health
+```
+
+生产构建包含 standalone server；SSE、API Routes、localStorage 和页面资源必须通过容器入口验证。错误场景应使用 mock 场景或注入无效配置测试，不打印凭证。
 
 ## 前端白板
 
