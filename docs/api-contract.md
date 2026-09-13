@@ -199,13 +199,23 @@ data: {"mapId":"map_x","mockMode":true,"error":{"code":"NOT_LEARNABLE","message"
 ```text
 Key: zhijing:progress:v1
 Value: {
-  "completedNodeIds": ["map_微积分_limits"],
+  "completedNodeIds": ["[\"map_微积分\",\"limits\"]"],
   "updatedAt": 1760000000000
 }
 ```
 
-`mapId` 是生成版本，不可用作 localStorage 进度作用域。`progressScope` 才是稳定话题作用域；真实地图使用 `map_<normalizedTopic>`，与已有推荐的 `map_<normalizedTopic>_<nodeId>` 进度 ID 兼容。mock 使用独立的 `mock:<encodedScenario>:<encodedTopic>`，不得污染真实学习进度。
+`mapId` 是生成版本，不可用作 localStorage 进度作用域。`progressScope` 是地图级稳定话题命名空间，真实地图使用 `map_<normalizedTopic>`。第六阶段的节点学习记录 ID 使用 `JSON.stringify([progressScope, nodeId])`，避免话题或节点名中的分隔符碰撞。此前的下划线拼接只是文档示例，未有浏览器存储实现，不猜测迁移含歧义的旧字符串。mock 使用独立命名空间且资源链接禁用，不记录真实已学进度。
 
-缓存过期或重启后，相同话题及语义节点 ID 的进度不会因 mapId 更新而清空。要求生成器输出语义稳定的节点 ID；如果模型真正更换了知识点/ID，不能仅按位置或标题盲目迁移进度，旧记录保留而不伪造匹配。此前尚无 localStorage 读写实现，本阶段不实现进度迁移或浏览器读写。
+缓存过期或重启后，相同话题及语义节点 ID 的进度不会因 mapId 更新而清空。要求生成器输出语义稳定的节点 ID；如果模型真正更换了知识点/ID，不能仅按位置或标题盲目迁移进度，旧记录保留而不伪造匹配。
 
 清除进度只删除 `zhijing:progress:v1`，不删除地图缓存。`completedNodeCount` 不读取也不写入此进度。
+
+读取校验 completedNodeIds 为非空字符串数组、updatedAt 为非负安全整数。首次读取损坏或不可用存储按空进度降级，后续存储失败保留会话进度。写入失败不阻塞地图，清除失败会提示并保持会话内清除结果。仅真实安全资源链接点击（含键盘激活、中键）记录节点；展开节点或下钻不记录。
+
+## 7. 一级下钻
+
+客户端保存 `DrilldownContext`：depth 固定为 1，含 parentTopic、parentNodeId、topic（节点标题）和两项 breadcrumb。仍向 `/api/generate` 发送 `{topic: 节点标题}`；父上下文绑定到独立子地图控制器，不加入模型提示或缓存键，不改变 SSE 语义。
+
+ready/empty 节点可下钻，partial 地图中的 error 节点也可下钻；标题须满足现有 200 字符限制。子地图不提供继续下钻入口，控制器也拒绝递归。独立请求序号/mapId 防止旧请求覆盖当前视图，兼容完整 JSON 与 SSE 两种响应。
+
+返回上级取消子地图订阅，恢复父地图节点位置、视口、展开状态和当前本地进度；子地图失败仍保留父地图。只保留一组父子导航状态，不是多地图管理。根话题写入 URL 查询参数便于刷新恢复；导航快照不持久化，刷新返回根话题。

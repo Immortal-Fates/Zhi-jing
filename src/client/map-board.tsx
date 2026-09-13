@@ -3,26 +3,36 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Background, BackgroundVariant, Handle, MarkerType, Position, ReactFlow,
-  ReactFlowProvider, useReactFlow, type Node, type NodeProps, type Edge,
+  ReactFlowProvider, useReactFlow, type Node, type NodeProps, type Edge, type Viewport,
 } from '@xyflow/react';
 import {
   ArrowRight, BookOpen, Check, ChevronDown, Compass, ExternalLink, Focus,
-  LoaderCircle, MessageCircle, Minus, Plus, RotateCcw, Search, ThumbsUp, X,
+  LoaderCircle, MessageCircle, Minus, Plus, RotateCcw, Search, ThumbsUp, X, GitBranch, Trash2,
 } from 'lucide-react';
 import type { MapNode, Resource } from '../../types/domain';
 import { MapController, nodeRadius, safeResourceUrl, type MapView } from './map-controller';
+import { ProgressStore, PROGRESS_KEY, progressId } from './learning-progress';
+import { MapNavigation } from './map-navigation';
 import '@xyflow/react/dist/style.css';
 
 const levelNames = ['入门', '进阶', '深入'];
 const stateNames = { pending: '等待资源', ready: '资源就绪', empty: '暂无资源', error: '加载失败', retrying: '正在重试' };
 type KnowledgeData = {
-  node: MapNode; expanded: boolean; mockMode: boolean;
+  node: MapNode; expanded: boolean; mockMode: boolean; learned: boolean;
+  drill?: (id: string) => void;
   open: (id: string) => void; retry: (id: string) => void;
 };
-type ResourceData = { resource: Resource; mockMode: boolean; order: number };
+type ResourceData = { resource: Resource; mockMode: boolean; order: number; mark: () => void };
 type KnowledgeFlowNode = Node<KnowledgeData, 'knowledge'>;
 type ResourceFlowNode = Node<ResourceData, 'resource'>;
 type BoardNode = KnowledgeFlowNode | ResourceFlowNode;
+
+interface CanvasMemory {
+  positions: Map<string, { x: number; y: number }>;
+  expanded?: string;
+  viewport?: Viewport;
+}
+const freshMemory = (): CanvasMemory => ({ positions: new Map() });
 
 function nodeElementId(id: string): string { return `knowledge-${encodeURIComponent(JSON.stringify(id))}`; }
 
@@ -31,23 +41,28 @@ function KnowledgeNode({ data }: NodeProps<KnowledgeFlowNode>) {
   const loading = node.state === 'pending' || node.state === 'retrying';
   const canRetry = (node.state === 'empty' || node.state === 'error') && node.error?.retryable !== false;
   const diameter = nodeRadius(node.weight) * 2;
-  return <article className={`knowledge-node level-${node.level} state-${node.state}`} data-state={node.state}>
+  return <article className={`knowledge-node level-${node.level} state-${node.state}${data.learned ? ' is-learned' : ''}`}
+    data-state={node.state} data-learned={data.learned}>
     <Handle type="target" position={Position.Left} />
     <div className="node-topline"><span>{levelNames[node.level - 1]}</span><span>{String(node.level).padStart(2, '0')}</span></div>
     <button id={nodeElementId(node.id)} className="node-open nodrag" type="button"
-      aria-label={`${node.title}，${stateNames[node.state]}`} aria-expanded={expanded}
+      aria-label={`${node.title}，${stateNames[node.state]}${data.learned ? '，已学' : ''}`} aria-expanded={expanded}
       onClick={() => open(node.id)} disabled={node.state === 'pending'}>
       <span className="node-orbit" style={{ width: diameter, height: diameter }} aria-hidden="true">
         {loading ? <LoaderCircle className="spin" size={26} /> :
           node.state === 'ready' ? <BookOpen size={27} strokeWidth={1.5} /> :
             node.state === 'empty' ? <Search size={26} /> : <RotateCcw size={26} />}
         <span>{node.resources.length.toString().padStart(2, '0')}</span>
+        {data.learned && <span className="learned-badge"><Check size={16} /></span>}
       </span>
       <span className="node-title">{node.title}</span>
       <span className="node-summary">{node.summary}</span>
     </button>
     <div className="node-footer">
-      <span>{stateNames[node.state]}</span>
+      <span>{data.learned ? '已学 · ' : ''}{stateNames[node.state]}</span>
+      {data.drill && <button type="button" className="icon-button nodrag"
+        title="以此为中心展开" aria-label={`下钻 ${node.title}`} onClick={() => data.drill?.(node.id)}>
+        <GitBranch size={15} /></button>}
       {canRetry ? <button type="button" className="icon-button nodrag" aria-label={`重试 ${node.title}`} title="重试资源"
         onClick={() => retry(node.id)}><RotateCcw size={15} /></button> :
         <ChevronDown size={15} className={expanded ? 'expanded-chevron' : ''} aria-hidden="true" />}
@@ -56,7 +71,7 @@ function KnowledgeNode({ data }: NodeProps<KnowledgeFlowNode>) {
   </article>;
 }
 
-function ResourceContent({ resource, mockMode, order }: ResourceData) {
+function ResourceContent({ resource, mockMode, order, mark }: ResourceData) {
   const url = safeResourceUrl(resource.url, mockMode);
   return <>
     <div className="resource-eyebrow"><span>{mockMode ? '示例资源 · 非真实文章' : '来源：知乎'}</span><span>0{order + 1}</span></div>
@@ -66,6 +81,7 @@ function ResourceContent({ resource, mockMode, order }: ResourceData) {
       <span title="赞同"><ThumbsUp size={13} />{resource.voteUpCount}</span>
       <span title="评论"><MessageCircle size={13} />{resource.commentCount}</span>
       {url ? <a className="resource-link nodrag" href={url} target="_blank" rel="noopener noreferrer"
+        onClick={mark} onAuxClick={(event) => { if (event.button === 1) mark(); }}
         aria-label={`打开知乎原文：${resource.title}`} title="打开知乎原文"><ExternalLink size={16} /></a> :
         <span className="resource-disabled">{mockMode ? '仅供演示' : '链接不可用'}</span>}
     </div>
@@ -80,8 +96,9 @@ function SatelliteNode({ data }: NodeProps<ResourceFlowNode>) {
 }
 const nodeTypes = { knowledge: KnowledgeNode, resource: SatelliteNode };
 
-function ResourceDrawer({ node, mockMode, close, retry }: {
+function ResourceDrawer({ node, mockMode, close, retry, mark, drill }: {
   node: MapNode; mockMode: boolean; close: () => void; retry: () => void;
+  mark: () => void; drill?: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -113,19 +130,24 @@ function ResourceDrawer({ node, mockMode, close, retry }: {
     <p className="drawer-summary">{node.summary}</p>
     {node.resources.length ? node.resources.slice(0, 3).map((resource, order) =>
       <article className="drawer-resource" key={`${resource.contentType}:${resource.contentId}`}>
-        <ResourceContent resource={resource} mockMode={mockMode} order={order} />
+        <ResourceContent resource={resource} mockMode={mockMode} order={order} mark={mark} />
       </article>) : <p role="status">{node.state === 'empty' ? '社区暂无优质资料' : node.error?.message ?? stateNames[node.state]}</p>}
     {(node.state === 'empty' || node.state === 'error') && node.error?.retryable !== false &&
       <button className="text-button" type="button" onClick={retry}><RotateCcw size={16} />重试资源</button>}
     {node.state === 'retrying' && <p role="status">正在重试…</p>}
+    {drill && <button type="button" className="text-button drawer-drill" onClick={drill}>
+      <GitBranch size={16} />以此为中心展开</button>}
   </dialog>;
 }
 
-function Canvas({ view, controller, narrow }: { view: MapView; controller: MapController; narrow: boolean }) {
+function Canvas({ view, controller, narrow, memory, completed, mark, drill }: {
+  view: MapView; controller: MapController; narrow: boolean; memory: CanvasMemory;
+  completed: string[]; mark: (nodeId: string) => void; drill?: (nodeId: string) => void;
+}) {
   const flow = useReactFlow<BoardNode>();
-  const [positions, setPositions] = useState<Map<string, { x: number; y: number }>>(() => new Map());
-  const [expanded, setExpanded] = useState<string>();
-  const fitOnce = useRef(false);
+  const [positions, setPositions] = useState(() => memory.positions);
+  const [expanded, setExpanded] = useState<string | undefined>(memory.expanded);
+  const fitOnce = useRef(!!memory.viewport);
   const [initial] = useState(() => {
     const rows = [0, 0, 0];
     return Object.fromEntries(view.nodes.map((node) => [
@@ -143,12 +165,22 @@ function Canvas({ view, controller, narrow }: { view: MapView; controller: MapCo
   const focusNode = (id?: string) => {
     if (id) requestAnimationFrame(() => document.getElementById(nodeElementId(id))?.focus({ preventScroll: true }));
   };
-  const close = () => { const id = expanded; setExpanded(undefined); focusNode(id); };
-  const open = (id: string) => setExpanded((current) => current === id ? undefined : id);
+  const close = () => {
+    const id = expanded; memory.expanded = undefined; setExpanded(undefined); focusNode(id);
+  };
+  const open = (id: string) => setExpanded((current) => {
+    memory.expanded = current === id ? undefined : id;
+    return memory.expanded;
+  });
+  const canDrill = (node: MapNode) => !!drill && node.title.trim().length <= 200 && (
+    node.state === 'ready' || node.state === 'empty' || (node.state === 'error' && view.originalStatus === 'partial')
+  );
   const nodes = useMemo<BoardNode[]>(() => {
     const result: BoardNode[] = view.nodes.map((node) => ({
       id: node.id, type: 'knowledge', position: positions.get(node.id) ?? initial[node.id],
       data: { node, expanded: expanded === node.id, mockMode: view.mockMode ?? true,
+        learned: !!view.progressScope && completed.includes(progressId(view.topic, node.id, view.progressScope)),
+        drill: canDrill(node) ? drill : undefined,
         open, retry: (id) => { void controller.retry(id); } },
       width: 200, height: 350, measured: { width: 200, height: 350 },
       style: { width: 200, height: 350 }, selectable: false, zIndex: 2,
@@ -161,14 +193,14 @@ function Canvas({ view, controller, narrow }: { view: MapView; controller: MapCo
         result.push({
           id: JSON.stringify(['resource', selected.id, order]), type: 'resource',
           position: { x: position.x + 235, y: position.y + order * 172 },
-          data: { resource, order, mockMode: view.mockMode ?? true }, draggable: false,
+          data: { resource, order, mockMode: view.mockMode ?? true, mark: () => mark(selected.id) }, draggable: false,
           selectable: false, width: 230, height: 152, measured: { width: 230, height: 152 },
-          style: { width: 230, height: 152 }, zIndex: 3,
+          style: { width: 230, height: 152, pointerEvents: 'all' }, zIndex: 3,
         });
       });
     }
     return result;
-  }, [view.nodes, view.mockMode, positions, initial, expanded, narrow, controller]);
+  }, [view.nodes, view.mockMode, positions, initial, expanded, narrow, controller, completed, mark, drill, view.progressScope, view.topic, view.originalStatus]);
   const edges = useMemo<Edge[]>(() => {
     const result: Edge[] = view.edges.map((edge, index) => ({
       id: `edge-${index}`, source: edge.from, target: edge.to, type: 'smoothstep',
@@ -206,10 +238,13 @@ function Canvas({ view, controller, narrow }: { view: MapView; controller: MapCo
         aria-label={`查看 ${node.title} 资源`}>{node.title}</button>)}
     </nav>}
     <ReactFlow<BoardNode> nodes={nodes} edges={edges} nodeTypes={nodeTypes}
+      defaultViewport={memory.viewport}
+      onMoveEnd={(_event, viewport) => { memory.viewport = viewport; }}
       onNodesChange={(changes) => {
         setPositions((previous) => {
           const next = new Map(previous);
           for (const change of changes) if (change.type === 'position' && change.position) next.set(change.id, change.position);
+          memory.positions = next;
           return next;
         });
       }}
@@ -233,13 +268,22 @@ function Canvas({ view, controller, narrow }: { view: MapView; controller: MapCo
       <button type="button" className="icon-button" title="收起资源" aria-label="收起资源" onClick={close}><X size={17} /></button>
     </aside>}
     {selected && narrow && <ResourceDrawer node={selected} mockMode={view.mockMode ?? true} close={close}
+      mark={() => mark(selected.id)} drill={canDrill(selected) ? () => drill?.(selected.id) : undefined}
       retry={() => { void controller.retry(selected.id); }} />}
   </section>;
 }
 
 export default function MapBoard() {
-  const [controller] = useState(() => new MapController());
+  const [navigation] = useState(() => new MapNavigation());
+  const controller = useSyncExternalStore(navigation.subscribe, navigation.snapshot, navigation.snapshot);
   const view = useSyncExternalStore(controller.subscribe, controller.snapshot, controller.snapshot);
+  const [progress] = useState(() => new ProgressStore());
+  const learning = useSyncExternalStore(progress.subscribe, progress.snapshot, progress.snapshot);
+  const [storageNotice, setStorageNotice] = useState('');
+  const memories = useRef(new Map<string, CanvasMemory>());
+  const viewKey = `${view.drilldown ? `child-${navigation.childKey()}` : 'parent'}:${view.requestId}`;
+  if (!memories.current.has(viewKey)) memories.current.set(viewKey, freshMemory());
+  const memory = memories.current.get(viewKey)!;
   const [input, setInput] = useState('');
   const [narrow, setNarrow] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -249,11 +293,47 @@ export default function MapBoard() {
     const update = () => setNarrow(query.matches);
     update();
     query.addEventListener('change', update);
-    const leave = () => controller.cancel();
+    const leave = () => navigation.cancel();
     window.addEventListener('pagehide', leave);
-    return () => { query.removeEventListener('change', update); window.removeEventListener('pagehide', leave); controller.cancel(); };
-  }, [controller]);
-  const load = (topic: string) => { setInput(topic); void controller.load(topic); };
+    return () => { query.removeEventListener('change', update); window.removeEventListener('pagehide', leave); navigation.cancel(); };
+  }, [navigation]);
+  useEffect(() => {
+    progress.restore();
+    const sync = (event: StorageEvent) => { if (event.key === PROGRESS_KEY || event.key === null) progress.restore(); };
+    window.addEventListener('storage', sync);
+    const topic = new URL(window.location.href).searchParams.get('topic');
+    if (topic) { setInput(topic); void navigation.load(topic); }
+    return () => window.removeEventListener('storage', sync);
+  }, [navigation, progress]);
+  const load = (topic: string) => {
+    setInput(topic);
+    if (topic.trim() && topic.trim().length <= 200) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('topic', topic.trim());
+      window.history.replaceState(null, '', url);
+      memories.current.clear();
+    }
+    void navigation.load(topic);
+  };
+  const mark = (nodeId: string) => {
+    if (!view.progressScope || view.mockMode !== false) return;
+    const node = view.nodes.find((node) => node.id === nodeId);
+    if (!node?.resources.some((resource) => safeResourceUrl(resource.url, false))) return;
+    progress.mark(progressId(view.topic, nodeId, view.progressScope));
+  };
+  const learnedCount = view.progressScope ? view.nodes.filter((node) =>
+    learning.completedNodeIds.includes(progressId(view.topic, node.id, view.progressScope))).length : 0;
+  const back = () => {
+    for (const key of memories.current.keys()) if (key.startsWith('child-')) memories.current.delete(key);
+    navigation.back();
+    setInput(navigation.parent.snapshot().topic);
+  };
+  const reload = () => {
+    if (view.drilldown) {
+      for (const key of memories.current.keys()) if (key.startsWith('child-')) memories.current.delete(key);
+      void controller.load(view.drilldown.topic, view.drilldown);
+    } else load(view.topic || input);
+  };
   const errors = view.nodes.filter((node) => node.state === 'error').length;
   const settled = view.nodes.filter((node) => !['pending', 'retrying'].includes(node.state)).length;
 
@@ -269,7 +349,7 @@ export default function MapBoard() {
           aria-label={busy ? '切换学习话题' : '生成地图'} title="生成地图"><ArrowRight size={19} /></button>
       </form>
       <button className="reload-button" type="button" disabled={!view.topic || busy}
-        onClick={() => load(view.topic)}><RotateCcw size={15} />重新加载</button>
+        onClick={reload}><RotateCcw size={15} />重新加载</button>
     </header>
     <nav className="topic-shortcuts" aria-label="话题快捷入口">
       <span>探索话题</span>
@@ -278,6 +358,11 @@ export default function MapBoard() {
           disabled={busy && view.topic === topic} onClick={() => load(topic)}>{topic}<ArrowRight size={13} /></button>)}
       <span className="shortcut-end">入门 <span>→</span> 进阶 <span>→</span> 深入</span>
     </nav>
+    {view.drilldown && <nav className="breadcrumbs" aria-label="地图面包屑">
+      <button type="button" onClick={back}>{view.drilldown.breadcrumb[0]}</button>
+      <ArrowRight size={13} aria-hidden="true" /><span aria-current="page">{view.drilldown.breadcrumb[1]}</span>
+      <small>一级下钻</small>
+    </nav>}
     {view.mockMode === true && <div className="mock-banner" role="note">
       <span className="mode-tag">MOCK</span>演示模式 · 固定示例数据，不代表当前话题的真实知乎文章
     </div>}
@@ -286,15 +371,30 @@ export default function MapBoard() {
       <div><span>这是什么</span><p>{view.overview.what}</p></div>
       <div><span>学完能做什么</span><p>{view.overview.gain}</p></div>
     </section>}
+    <section className="learning-progress" aria-label="本地学习进度">
+      <span role="status">已学 {learnedCount} / {view.nodes.length} 个知识点</span>
+      <progress value={learnedCount} max={view.nodes.length || 1} aria-label="已学知识点比例" />
+      <button type="button" className="icon-button" title="清除本地学习进度" aria-label="清除本地学习进度"
+        onClick={() => {
+          if (!window.confirm('清除所有本地学习进度？当前地图不会被清除。')) return;
+          setStorageNotice(progress.clear() ? '' : '存储不可用，当前会话进度已清空');
+        }}><Trash2 size={15} /></button>
+      {storageNotice && <small role="status">{storageNotice}</small>}
+    </section>
     <div className="generation-status" role="status" aria-live="polite">
-      {busy ? <><LoaderCircle size={15} className="spin" />{view.phase === 'loading' ? '正在生成学习大纲…' : `正在检索资源 · ${settled}/${view.nodes.length}`}</> :
+      {busy ? <><LoaderCircle size={15} className="spin" />{view.drilldown ? '下钻：' : ''}{view.phase === 'loading' ? '正在生成学习大纲…' : `正在检索资源 · ${settled}/${view.nodes.length}`}</> :
         view.phase === 'finished' ? <><Check size={15} />{view.originalStatus === 'partial' ? '原始生成：部分资源失败' : '地图已生成'}
           <span>当前失败 {errors} 个</span></> : view.phase === 'idle' ? <><BookOpen size={15} />从一个话题开始</> : null}
     </div>
     {view.error && <div className="error-banner" role="alert"><span>{view.error}</span>
-      <button type="button" onClick={() => load(view.topic || input)} disabled={busy}>重新加载</button></div>}
-    {view.mapId && view.nodes.length ? <ReactFlowProvider key={view.requestId}>
-      <Canvas view={view} controller={controller} narrow={narrow} />
+      <button type="button" onClick={reload} disabled={busy}>重新加载</button>
+      {view.drilldown && <button type="button" onClick={back}>返回上级</button>}</div>}
+    {view.mapId && view.nodes.length ? <ReactFlowProvider key={viewKey}>
+      <Canvas view={view} controller={controller} narrow={narrow} memory={memory}
+        completed={learning.completedNodeIds} mark={mark}
+        drill={view.drilldown ? undefined : (id) => {
+          if (navigation.enter(id)) setInput(navigation.snapshot().snapshot().topic);
+        }} />
     </ReactFlowProvider> : <section className="empty-board">
       <div className="board-mark" aria-hidden="true"><Compass size={48} strokeWidth={1} /></div>
       <h1>{view.phase === 'loading' ? '正在构建学习路径' : '你想从哪里开始？'}</h1>

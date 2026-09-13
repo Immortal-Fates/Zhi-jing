@@ -75,8 +75,17 @@ export interface KnowledgeMapOutline {
 }
 
 export interface KnowledgeMap extends KnowledgeMapOutline, GenerationIdentity, GenerationSummary {
+  /** Stable topic namespace for learning records; independent of generation mapId. */
   progressScope: string;
   generatedAt: number;
   expiresAt?: number;
   nodes: MapNode[];
+}
+
+export interface DrilldownContext {
+  depth: 1;
+  parentTopic: string;
+  parentNodeId: string;
+  topic: string;
+  breadcrumb: [string, string];
 }

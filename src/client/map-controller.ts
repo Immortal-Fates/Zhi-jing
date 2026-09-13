@@ -1,18 +1,20 @@
 import type { ApiError, SseEvent } from '../../types/api.ts';
-import type { GenerationStatus, MapEdge, MapNode, MapOverview } from '../../types/domain.ts';
-import { isApiError, isResourceResponse, MapEventDecoder } from './map-events.ts';
+import type { DrilldownContext, GenerationStatus, MapEdge, MapNode, MapOverview } from '../../types/domain.ts';
+import { isApiError, isKnowledgeMap, isResourceResponse, MapEventDecoder } from './map-events.ts';
 
 export interface MapView {
   requestId: number;
   topic: string;
   mapId?: string;
   mockMode?: boolean;
+  progressScope?: string;
   overview?: MapOverview;
   nodes: MapNode[];
   edges: MapEdge[];
   phase: 'idle' | 'loading' | 'streaming' | 'finished' | 'failed';
   originalStatus?: GenerationStatus;
   error?: string;
+  drilldown?: DrilldownContext;
 }
 
 export function nodeRadius(weight: number): number {
@@ -68,7 +70,7 @@ export class MapController {
     }
   }
 
-  async load(input: string): Promise<void> {
+  async load(input: string, drilldown?: DrilldownContext): Promise<void> {
     const topic = input.trim();
     if (!topic || topic.length > 200) {
       this.update({ error: '请输入 1–200 个字符的学习话题' });
@@ -80,7 +82,7 @@ export class MapController {
     const requestId = this.value.requestId + 1;
     this.received = new Set();
     this.terminal = false;
-    this.value = { requestId, topic, phase: 'loading', nodes: [], edges: [] };
+    this.value = { requestId, topic, phase: 'loading', nodes: [], edges: [], drilldown };
     this.listeners.forEach((listener) => listener());
     const current = () => this.value.requestId === requestId && !subscription.signal.aborted;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -90,7 +92,7 @@ export class MapController {
         headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify({ topic }),
       });
-      if (!current()) return;
+      if (!current()) { await response.body?.cancel().catch(() => {}); return; }
       if (!response.ok) {
         const data: unknown = await response.json();
         if (!current()) return;
@@ -99,6 +101,18 @@ export class MapController {
           this.update({ mockMode: data.mockMode });
         }
         throw new Error(isApiError(error) ? error.message : '生成失败，请重新加载');
+      }
+      if (response.headers.get('content-type')?.includes('application/json')) {
+        const data: unknown = await response.json();
+        if (!current()) return;
+        if (!isKnowledgeMap(data)) throw new Error('地图响应格式不正确');
+        this.terminal = true;
+        this.update({
+          mapId: data.mapId, mockMode: data.mockMode, progressScope: data.progressScope,
+          nodes: data.nodes, edges: data.edges, overview: data.overview,
+          phase: 'finished', originalStatus: data.status,
+        });
+        return;
       }
       if (!response.headers.get('content-type')?.includes('text/event-stream') || !response.body) {
         throw new Error('服务未返回地图事件流');
@@ -132,6 +146,7 @@ export class MapController {
     if (event.event === 'outline') {
       this.update({
         mapId: data.mapId, mockMode: data.mockMode, phase: 'streaming',
+        progressScope: event.data.progressScope,
         overview: event.data.overview, edges: event.data.edges,
         nodes: event.data.nodes.map(({ id, title, level, summary, query }) =>
           ({ id, title, level, summary, query, state: 'pending', weight: 0, resources: [] })),

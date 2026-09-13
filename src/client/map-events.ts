@@ -1,5 +1,6 @@
 import type { ApiError, ResourceResponse, SseEvent } from '../../types/api.ts';
 import { validateOutline } from '../lib/outline-validator.ts';
+import type { KnowledgeMap } from '../../types/domain.ts';
 
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -22,6 +23,21 @@ export function isResourceResponse(value: unknown): value is ResourceResponse {
     text(value.nodeId) && (value.state === 'ready' || value.state === 'empty') &&
     number(value.weight) && value.weight <= 3 && validResources(value.resources) &&
     (value.state === 'empty' ? (value.resources as unknown[]).length === 0 : (value.resources as unknown[]).length > 0);
+}
+
+export function isKnowledgeMap(value: unknown): value is KnowledgeMap {
+  if (!record(value) || !validateOutline(value).ok || !text(value.mapId) || !value.mapId ||
+    !text(value.progressScope) || !value.progressScope || typeof value.mockMode !== 'boolean' ||
+    !number(value.generatedAt) || !number(value.completedNodeCount) || !number(value.failedNodeCount) ||
+    !['complete', 'partial'].includes(String(value.status)) || !Array.isArray(value.nodes)) return false;
+  const nodesValid = value.nodes.every((node) => {
+    if (!record(node)) return false;
+    if (node.state === 'error') return isApiError(node.error) && validResources(node.resources) && node.weight === 0;
+    return isResourceResponse({ ...node, nodeId: node.id, mockMode: value.mockMode, ok: true });
+  });
+  const failed = value.nodes.filter((node) => record(node) && node.state === 'error').length;
+  return nodesValid && value.completedNodeCount === value.nodes.length && value.failedNodeCount === failed &&
+    value.status === (failed ? 'partial' : 'complete');
 }
 
 export function decodeMapEvent(name: string, json: string): SseEvent | undefined {
