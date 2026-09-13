@@ -21,9 +21,14 @@ test('foundation exposes the required project scripts', async () => {
 
 test('production configuration uses standalone output and disables mock in the container', async () => {
   const dockerfile = await readFile(new URL('Dockerfile', root), 'utf8');
+  const dockerignore = await readFile(new URL('.dockerignore', root), 'utf8');
   const nextConfig = await readFile(new URL('next.config.ts', root), 'utf8');
   assert.match(dockerfile, /ENV ZHIJING_MOCK_MODE=false/);
   assert.match(dockerfile, /CMD \["node", "server\.js"\]/);
+  assert.doesNotMatch(dockerfile, /COPY --from=builder \/app\/public/);
+  assert.match(dockerignore, /\.codex\//);
+  assert.match(dockerignore, /\.next\//);
+  assert.match(dockerignore, /node_modules\//);
   assert.match(nextConfig, /output:\s*'standalone'/);
   assert.match(nextConfig, /X-Frame-Options/);
   assert.match(nextConfig, /Content-Security-Policy/);
