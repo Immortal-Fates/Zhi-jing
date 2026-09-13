@@ -237,7 +237,11 @@ export function parseAnswerJson(content: string): unknown {
 }
 
 export function parseAnswerOutline(payload: unknown): KnowledgeMapOutline {
-  const result = validateOutline(parseAnswerJson(extractAnswerContent(payload)));
+  const parsed = parseAnswerJson(extractAnswerContent(payload));
+  if (isRecord(parsed) && parsed.error === 'not_learnable') {
+    throwAdapterError('NOT_LEARNABLE', '请更换为可学习的领域或技能', false);
+  }
+  const result = validateOutline(parsed);
   if (!result.ok) {
     throwAdapterError('OUTLINE_INVALID', '知乎直答大纲校验失败', true);
   }
@@ -295,8 +299,12 @@ async function requestJson(
   url: URL,
   init: RequestInit,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) controller.abort();
   let didTimeout = false;
   const timer = setTimeout(() => {
     didTimeout = true;
@@ -304,6 +312,9 @@ async function requestJson(
   }, timeoutMs);
 
   try {
+    if (controller.signal.aborted) {
+      throwAdapterError('UPSTREAM_TIMEOUT', '知乎服务请求已取消', true);
+    }
     const response = await fetchImpl(url, {
       ...init,
       signal: controller.signal,
@@ -350,6 +361,7 @@ async function requestJson(
     throwAdapterError('UPSTREAM_ERROR', '知乎服务网络请求失败', true);
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
   }
 }
 
@@ -452,7 +464,10 @@ export class ZhihuClient {
     this.now = options.now ?? Date.now;
   }
 
-  async search(query: string, count = DEFAULT_SEARCH_COUNT): Promise<ZhihuSearchResult> {
+  async search(
+    query: string, count = DEFAULT_SEARCH_COUNT, signal?: AbortSignal,
+  ): Promise<ZhihuSearchResult> {
+    if (signal?.aborted) throwAdapterError('UPSTREAM_TIMEOUT', '知乎服务请求已取消', true);
     if (this.mockMode) {
       const result = await mockSearch(this.mockScenario);
       return { ...result, resources: result.resources.slice(0, normalizeSearchCount(count)) };
@@ -470,11 +485,13 @@ export class ZhihuClient {
       url,
       { method: 'GET', headers: this.headers() },
       this.searchTimeoutMs,
+      signal,
     );
     return mapSearchPayload(payload);
   }
 
-  async answer(prompt: string): Promise<KnowledgeMapOutline> {
+  async answer(prompt: string, signal?: AbortSignal): Promise<KnowledgeMapOutline> {
+    if (signal?.aborted) throwAdapterError('UPSTREAM_TIMEOUT', '知乎服务请求已取消', true);
     if (this.mockMode) {
       return mockAnswer(this.mockScenario);
     }
@@ -494,6 +511,7 @@ export class ZhihuClient {
         }),
       },
       this.outlineTimeoutMs,
+      signal,
     );
     return parseAnswerOutline(payload);
   }
@@ -502,6 +520,10 @@ export class ZhihuClient {
     if (!this.#accessSecret.trim()) {
       throwAdapterError('UPSTREAM_AUTH', '知乎服务凭证未配置', false);
     }
+  }
+
+  checkConfiguration(): void {
+    if (!this.mockMode) this.requireAccessSecret();
   }
 
   private headers(): HeadersInit {

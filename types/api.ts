@@ -1,6 +1,9 @@
 import type {
   KnowledgeMap,
   KnowledgeMapOutline,
+  GenerationIdentity,
+  GenerationSummary,
+  MapNode,
   NodeErrorCode,
   NodeState,
   Resource,
@@ -28,7 +31,7 @@ export interface ApiErrorResponse {
   error: ApiError;
 }
 
-export type ApiResponse<T extends object> = T | ApiErrorResponse;
+export type ApiResponse<T extends object> = (T | ApiErrorResponse) & { mockMode: boolean };
 
 export interface OutlineRequest {
   topic: string;
@@ -40,6 +43,7 @@ export interface ResourcesRequest extends OutlineRequest {
 }
 
 export type MapRequest = OutlineRequest;
+export type GenerateRequest = OutlineRequest;
 
 export type OutlineResponse = ApiResponse<KnowledgeMapOutline>;
 
@@ -47,61 +51,66 @@ export type MapResponse = ApiResponse<KnowledgeMap>;
 
 export interface ResourceResponse {
   ok: true;
+  mockMode: boolean;
   nodeId: string;
-  state: Extract<NodeState, 'ready' | 'empty' | 'error'>;
+  state: Extract<NodeState, 'ready' | 'empty'>;
   resources: Resource[];
-  errorCode?: NodeErrorCode;
+  weight: number;
 }
 
-export type SseEventName =
-  | 'outline'
-  | 'resource_ready'
-  | 'resource_empty'
-  | 'resource_error'
-  | 'complete';
+export type SseEventName = SseEvent['event'];
 
 export interface OutlineSseEvent {
   event: 'outline';
-  data: KnowledgeMapOutline & { mapId: string };
+  data: Omit<KnowledgeMapOutline, 'nodes'> & GenerationIdentity & {
+    progressScope: string;
+    nodes: MapNode[];
+  };
 }
 
 export interface ResourceReadySseEvent {
   event: 'resource_ready';
-  data: {
-    mapId: string;
+  data: GenerationIdentity & {
     nodeId: string;
     state: 'ready';
     resources: Resource[];
+    weight: number;
   };
 }
 
 export interface ResourceEmptySseEvent {
   event: 'resource_empty';
-  data: {
-    mapId: string;
+  data: GenerationIdentity & {
     nodeId: string;
     state: 'empty';
     resources: [];
+    weight: 0;
   };
 }
 
 export interface ResourceErrorSseEvent {
   event: 'resource_error';
-  data: {
-    mapId: string;
+  data: GenerationIdentity & {
     nodeId: string;
     state: 'error';
     resources: [];
     errorCode: NodeErrorCode;
+    error: ApiError;
+    weight: 0;
   };
 }
 
 export interface CompleteSseEvent {
   event: 'complete';
-  data: {
-    mapId: string;
-    completedNodeCount: number;
+  data: GenerationIdentity & GenerationSummary & {
+    generatedAt: number;
+    expiresAt?: number;
   };
+}
+
+export interface GenerationErrorSseEvent {
+  event: 'generation_error';
+  data: GenerationIdentity & { error: ApiError };
 }
 
 export type SseEvent =
@@ -109,4 +118,5 @@ export type SseEvent =
   | ResourceReadySseEvent
   | ResourceEmptySseEvent
   | ResourceErrorSseEvent
-  | CompleteSseEvent;
+  | CompleteSseEvent
+  | GenerationErrorSseEvent;

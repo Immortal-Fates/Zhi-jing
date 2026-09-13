@@ -6,7 +6,7 @@
 
 文档、接口契约和 mock 约定已准备好；应用功能仍按 `docs/prd.md` 分阶段实现。当前已迁移到 Next.js App Router，服务只提供基础健康检查和脚手架首页。
 
-领域模型、大纲校验和知乎服务端适配层已实现，尚未接入业务路由或地图页面。
+领域模型、知乎服务端适配层及地图生成 API/SSE 已实现；页面仍是脚手架，不含完整地图 UI。
 
 ## 开发环境
 
@@ -54,6 +54,29 @@ mock 复用 `fixtures/`，客户端选项 `mockScenario` 支持 `default`、`emp
 搜索仅复制资源元数据的白名单字段，忽略未知字段；必要字段缺失返回 `UPSTREAM_ERROR`，不伪装为空结果。`authorBadge` 为认证图片，`authorBadgeText` 为认证文案；图片缺失可省略。保持上游资源顺序和 `rankingScore`，`score` 初始化为 0，相关性过滤、综合评分和 top3 选择由后续业务层负责。摘要仅作为文本数据，不在适配层抓取或保存文章全文。
 
 适配层不自动重试、不跟随重定向、不缓存请求，也不创建 SSE、数据库或业务路由。
+
+## 地图生成
+
+运行 `npm run dev`，默认 mock 地址为 `http://127.0.0.1:4173`。仅显式设置 `ZHIJING_MOCK_MODE=false` 才接入真实上游。
+
+```bash
+curl http://127.0.0.1:4173/api/health
+curl -N http://127.0.0.1:4173/api/generate \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: text/event-stream' \
+  -d '{"topic":"微积分"}'
+curl 'http://127.0.0.1:4173/api/map?topic=%E5%BE%AE%E7%A7%AF%E5%88%86'
+```
+
+`POST /api/generate` 不传 SSE Accept 时返回 JSON；另有 `POST /api/outline`、`POST /api/resources`。partial 地图允许 HTTP 200，但独立资源失败和整次生成失败为非 2xx。所有 JSON/事件携带 mockMode，mock 使用固定示例，不代表输入话题的真实知乎内容。
+
+开发服务的 `ZHIJING_MOCK_SCENARIO` 可选择适配层已有场景，默认 `default`；`empty` 用于完整空资源地图，其余错误可验证终止流。该配置只由服务器设置，请求体不能覆盖，修改后重启服务。
+
+共享任务在所有订阅者断开后继续。总超时默认 180 秒（`ZHIJING_GENERATION_TIMEOUT_MS`），超时取消上游并清理记录；搜索进程共享上限 5。完整缓存 TTL 默认 24 小时（`ZHIJING_MAP_TTL_SECONDS`），最多 100 张，失败/partial 不缓存；不同模式和 mock 场景隔离。缓存仅在进程内，重启、热更新或多实例之间不保证共享。
+
+mapId 是生成版本，progressScope 是稳定学习话题作用域，不能用前者代替 localStorage 进度 ID。完整请求/响应、SSE 终止语义与限制见 `docs/api-contract.md`。
+
+本阶段无数据库、全局额度计数、登录或 UI。资源相关性过滤是有限规则，需后续人工验证真实内容质量；未进行真实知乎 API 验收或生产部署。
 
 ## 文档入口
 

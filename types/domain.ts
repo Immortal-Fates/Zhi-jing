@@ -1,8 +1,24 @@
+import type { ApiError } from './api.ts';
+
 export type NodeLevel = 1 | 2 | 3;
 
 export type NodeState = 'pending' | 'ready' | 'empty' | 'error' | 'retrying';
 
-export type NodeErrorCode = 'timeout' | 'rate_limited' | 'unauthorized' | 'provider_error';
+export type NodeErrorCode =
+  | 'timeout' | 'rate_limited' | 'quota_exhausted' | 'unauthorized' | 'provider_error';
+
+export type GenerationStatus = 'complete' | 'partial';
+
+export interface GenerationIdentity {
+  mapId: string;
+  mockMode: boolean;
+}
+
+export interface GenerationSummary {
+  status: GenerationStatus;
+  completedNodeCount: number;
+  failedNodeCount: number;
+}
 
 export type MapEdgeType = 'main' | 'branch';
 
@@ -42,6 +58,7 @@ export interface MapNode extends MapNodeOutline {
   weight: number;
   state: NodeState;
   errorCode?: NodeErrorCode;
+  error?: ApiError;
 }
 
 export interface MapEdge {
@@ -57,7 +74,8 @@ export interface KnowledgeMapOutline {
   edges: MapEdge[];
 }
 
-export interface KnowledgeMap extends KnowledgeMapOutline {
+export interface KnowledgeMap extends KnowledgeMapOutline, GenerationIdentity, GenerationSummary {
+  progressScope: string;
   generatedAt: number;
   expiresAt?: number;
   nodes: MapNode[];

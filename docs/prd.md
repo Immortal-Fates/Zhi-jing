@@ -54,7 +54,7 @@
 5. 前端先渲染总览和灰色节点骨架。
 6. 服务端并发检索各节点资源。
 7. 每个节点资源返回后，前端逐个点亮节点并更新大小。
-8. 全部完成后写入地图缓存。
+8. 全部节点正常结束（ready/empty）后写入地图缓存；任一节点失败时保留 partial 结果但不缓存。
 
 ### 4.3 阅读资源
 
@@ -172,8 +172,8 @@
 - 节点 ID 唯一。
 - 边的起点和终点必须存在。
 - 不允许形成环。
-- 非学习类话题返回 `not_learnable`。
-- 非法 JSON 自动重试 1 次。
+- 非学习类话题映射为 `NOT_LEARNABLE`，不重试、不缓存。
+- 仅成功收到直答内容但 JSON 解析或结构校验失败时自动重试 1 次；网络、超时、鉴权、限流、额度错误不重试。
 
 ### 6.2 `POST /api/resources`
 
@@ -206,7 +206,7 @@
 }
 ```
 
-最多返回 3 条资源。无结果返回 `empty`，调用失败返回错误码。
+最多返回 3 条资源。成功包含 `ok: true`、`mockMode`、`weight`；无结果返回 `empty`，调用失败返回非 2xx 统一错误，不返回成功的 error 状态。
 
 ### 6.3 `GET /api/map`
 
@@ -222,9 +222,18 @@ resource_ready
 resource_empty
 resource_error
 complete
+generation_error
 ```
 
-每个事件必须带 `nodeId`（全局事件除外），前端按事件幂等更新，不因单个事件重复而产生重复节点。
+每个事件必须带 `mapId`、`mockMode` 和 `nodeId`（全局事件除外），前端按事件幂等更新，不因单个事件重复而产生重复节点。节点错误同时带统一 error。
+
+### 6.5 `POST /api/generate`
+
+统一入口接收 `{topic}`。默认等待并返回 JSON 地图；`Accept: text/event-stream` 时大纲校验后先发骨架、再逐节点发送事件。建流前错误使用非 2xx，建流后失败发送唯一 `generation_error` 并关闭。
+
+所有节点 ready/empty 为 `status: complete`；任何节点 error 则为 `partial`，JSON partial 允许 HTTP 200。`complete` 事件表示所有节点已经结束，不表示用户学完：completedNodeCount 包含错误节点，failedNodeCount 只统计错误节点。complete 与 generation_error 互斥且只能发送一次。
+
+生成 ID 与学习进度身份分离：mapId 在同次生成/缓存中不变，过期后新生成改变；progressScope 与语义节点 ID 跨生成保持稳定。mock 进度与真实进度隔离。详细 payload 以 `api-contract.md` 和现有 TypeScript 类型为准。
 
 ## 7. 排序与数据规则
 
@@ -253,12 +262,18 @@ score = 0.6 * normalizedRankingScore
 - `generatedAt`
 - `expiresAt`
 
+第四阶段只使用进程内缓存（完成后 TTL 默认 24 小时，最多 100 张），重启丢失，不跨实例共享。缓存和进行中任务均按 mock/真实、mock 场景和归一化话题隔离。不缓存 partial、失败或未完成结果。
+
+进程共享搜索并发上限 5。所有订阅者断开后任务继续，成功可缓存；总期限默认 180 秒，超时取消剩余工作并清理计时器、订阅者、进行中记录。无数据库或正式持久缓存。
+
 ### 8.2 `quota`
 
 - `date`
 - `outlineCount`
 - `resourceCount`
 - `updatedAt`
+
+全局额度计数不属于第四阶段。
 
 ## 9. 非功能需求
 
