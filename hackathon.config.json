@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "projectName": "zhijing",
+  "projectSlug": "zhijing",
+  "oauth": {
+    "enabled": false
+  },
+  "host": "127.0.0.1",
+  "port": 4173
+}
