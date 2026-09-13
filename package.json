@@ -8,7 +8,8 @@
     "start": "next start -H 127.0.0.1 -p 4173",
     "build": "next build",
     "check": "tsc --noEmit",
-    "test": "node --test tests/*.test.mjs"
+    "test": "npm run test:compile && node --test dist/test/tests/*.test.js tests/*.test.mjs",
+    "test:compile": "tsc -p tests/tsconfig.json"
   },
   "engines": {
     "node": ">=22"

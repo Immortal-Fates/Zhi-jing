@@ -1,0 +1,13 @@
+{
+  "id": "chatcmpl-mock-invalid",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"topic\":\"微积分\",\"nodes\":["
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}

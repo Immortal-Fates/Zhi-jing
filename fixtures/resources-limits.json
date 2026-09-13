@@ -1,0 +1,61 @@
+{
+  "Code": 0,
+  "Message": "success",
+  "Data": {
+    "HasMore": false,
+    "SearchHashId": "mock-limits",
+    "Items": [
+      {
+        "Title": "如何直观理解极限？",
+        "ContentType": "Answer",
+        "ContentID": "mock-answer-limits-1",
+        "ContentText": "从数列和函数的趋近过程理解极限。",
+        "Url": "https://www.zhihu.com/answer/mock-answer-limits-1",
+        "CommentCount": 42,
+        "VoteUpCount": 318,
+        "AuthorName": "知乎用户甲",
+        "AuthorAvatar": "",
+        "AuthorBadge": "",
+        "AuthorBadgeText": "",
+        "EditTime": 1760000000,
+        "CommentInfoList": [],
+        "AuthorityLevel": "2",
+        "RankingScore": 0.96
+      },
+      {
+        "Title": "微积分中的极限与连续",
+        "ContentType": "Article",
+        "ContentID": "mock-article-limits-1",
+        "ContentText": "介绍极限、连续和常见计算方法。",
+        "Url": "https://zhuanlan.zhihu.com/p/mock-article-limits-1",
+        "CommentCount": 18,
+        "VoteUpCount": 205,
+        "AuthorName": "知乎用户乙",
+        "AuthorAvatar": "",
+        "AuthorBadge": "",
+        "AuthorBadgeText": "",
+        "EditTime": 1760000100,
+        "CommentInfoList": [],
+        "AuthorityLevel": "3",
+        "RankingScore": 0.9
+      },
+      {
+        "Title": "用图像认识函数极限",
+        "ContentType": "Answer",
+        "ContentID": "mock-answer-limits-2",
+        "ContentText": "通过图像和例子建立对极限的初步认识。",
+        "Url": "https://www.zhihu.com/answer/mock-answer-limits-2",
+        "CommentCount": 9,
+        "VoteUpCount": 96,
+        "AuthorName": "知乎用户丙",
+        "AuthorAvatar": "",
+        "AuthorBadge": "",
+        "AuthorBadgeText": "",
+        "EditTime": 1760000200,
+        "CommentInfoList": [],
+        "AuthorityLevel": "1",
+        "RankingScore": 0.82
+      }
+    ]
+  }
+}

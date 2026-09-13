@@ -1,0 +1,10 @@
+{
+  "Code": 0,
+  "Message": "success",
+  "Data": {
+    "HasMore": false,
+    "SearchHashId": "mock-empty",
+    "Items": [],
+    "EmptyReason": "没有找到符合条件的优质资料"
+  }
+}
