@@ -58,7 +58,9 @@ ZHIJING_GENERATION_TIMEOUT_MS=180000
 
 生产容器默认设置 `NODE_ENV=production`、`HOSTNAME=0.0.0.0`、`PORT=8080` 和 `ZHIJING_MOCK_MODE=false`。`npm start` 与容器均运行 Next standalone server。真实模式缺少 `ZHIHU_ACCESS_SECRET` 时，知乎调用会返回脱敏的 `UPSTREAM_AUTH`，不会回退到 mock。Secret 只能在 CloudBase 服务端环境变量/Secret 配置中注入，发布日志、构建参数和客户端环境变量均不得包含它。
 
-当前仓库未配置 CloudBase CLI 或部署凭证。完成线上发布前需要在 CloudBase 控制台或受信任的部署环境中配置 `ZHIHU_ACCESS_SECRET`，再执行容器发布；没有该凭证时只能完成本地和容器构建检查，不能声称已有公开地址。
+本次已通过 CloudBase CLI 发布版本 `zhijing-003`，公开地址为 `https://zhijing-313168-9-1487236010.sh.run.tcloudbase.com`，当前流量为 100%。仓库不保存 CloudBase CLI 登录信息或部署 Secret。
+
+当前线上服务的 `ZHIJING_MOCK_MODE=false` 已生效，但 CloudBase 服务环境尚未注入 `ZHIHU_ACCESS_SECRET`，因此生成与资源接口会安全返回 `UPSTREAM_AUTH`。在 CloudBase 服务端 Secret 配置中注入凭证并发布新版本后，才能验证真实知乎内容链路；没有该凭证时不要把线上错误降级为 mock 成功。
 
 ## 知乎适配层
 
