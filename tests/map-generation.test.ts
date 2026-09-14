@@ -9,7 +9,7 @@ import {
   MapGenerationService, type GenerationClient, type GenerationContext,
 } from '../src/server/map-generation.ts';
 import { createMapHandlers, generationContext } from '../src/server/map-http.ts';
-import { SearchScheduler } from '../src/server/search-scheduler.ts';
+import { DEFAULT_SEARCH_CONCURRENCY, SearchScheduler } from '../src/server/search-scheduler.ts';
 import {
   createZhihuClient, mapSearchItemToResource, parseAnswerOutline, ZhihuAdapterError,
 } from '../src/server/zhihu-adapter.ts';
@@ -18,6 +18,7 @@ import { rankResources } from '../src/server/resource-ranking.ts';
 delete process.env.ZHIHU_ACCESS_SECRET;
 delete process.env.ZHIJING_MOCK_MODE;
 delete process.env.ZHIJING_MOCK_SCENARIO;
+delete process.env.ZHIJING_SEARCH_CONCURRENCY;
 
 const context: GenerationContext = { mockMode: true, mockScenario: 'default' };
 const fixture = JSON.parse(await readFile(resolve('fixtures/outline-calculus.json'), 'utf8')) as KnowledgeMapOutline;
@@ -142,7 +143,7 @@ test('same-topic requests share one task and replay immutable events without gap
 });
 
 test('empty and error nodes do not block siblings; partial maps are never cached', async () => {
-  const service = new MapGenerationService({ clientFactory: () => client({
+  const service = new MapGenerationService({ retryDelayMs: 0, clientFactory: () => client({
     search: async (query) => {
       if (query === fixture.nodes[0].query) return { resources: [] };
       if (query === fixture.nodes[1].query) fail('UPSTREAM_RATE_LIMITED');
@@ -241,7 +242,7 @@ test('NOT_LEARNABLE recognition in the real adapter does not become OUTLINE_INVA
   });
 });
 
-test('process-shared concurrency never exceeds five across tasks and resources endpoint', async () => {
+test('process-shared concurrency never exceeds the search limit across tasks and resources endpoint', async () => {
   let active = 0;
   let peak = 0;
   const releases: Array<() => void> = [];
@@ -256,15 +257,75 @@ test('process-shared concurrency never exceeds five across tasks and resources e
   const tasks = [a.generate('one', context), b.generate('two', context)];
   const standalone = b.resources('two', 'id', 'query', context);
   await tick();
-  assert.equal(active, 5);
-  for (let i = 0; i < 20; i++) {
+  assert.equal(active, DEFAULT_SEARCH_CONCURRENCY);
+  for (let i = 0; i < 40; i++) {
     releases.splice(0).forEach((done) => done());
     await tick();
     if (Number(active) === 0) break;
   }
   await Promise.all([...tasks.map((t) => t.result), standalone]);
-  assert.equal(peak, 5);
+  assert.equal(peak, DEFAULT_SEARCH_CONCURRENCY);
   assert.equal(active, 0);
+});
+
+test('rate-limited searches back off and recover instead of failing their node', async () => {
+  let calls = 0;
+  const service = new MapGenerationService({
+    retryDelayMs: 0,
+    clientFactory: () => client({
+      search: async (query) => {
+        if (query !== fixture.nodes[0].query) return { resources };
+        calls++;
+        if (calls < 3) fail('UPSTREAM_RATE_LIMITED');
+        return { resources };
+      },
+    }),
+  });
+  const outcome = await service.generate('test', context).result;
+  assert.ok(outcome.ok);
+  assert.equal(calls, 3);
+  assert.equal(outcome.map.status, 'complete');
+  assert.equal(outcome.map.nodes[0].state, 'ready');
+});
+
+test('rate limiting gives up after the retry budget and other codes never retry', async () => {
+  for (const code of ['UPSTREAM_RATE_LIMITED', 'UPSTREAM_ERROR', 'QUOTA_EXHAUSTED'] as ApiErrorCode[]) {
+    let calls = 0;
+    const service = new MapGenerationService({
+      retryDelayMs: 0,
+      clientFactory: () => client({
+        search: async (query) => {
+          if (query !== fixture.nodes[0].query) return { resources };
+          calls++;
+          fail(code);
+        },
+      }),
+    });
+    const outcome = await service.generate(`test-${code}`, context).result;
+    assert.ok(outcome.ok);
+    assert.equal(calls, code === 'UPSTREAM_RATE_LIMITED' ? 3 : 1);
+    assert.equal(outcome.map.nodes[0].state, 'error');
+    assert.equal(outcome.map.nodes[0].error?.code, code);
+  }
+});
+
+test('retry backoff aborts with the generation timeout and never leaks timers', async () => {
+  let calls = 0;
+  const service = new MapGenerationService({
+    timeoutMs: 25, retryDelayMs: 10_000,
+    clientFactory: () => client({
+      search: async () => { calls++; fail('UPSTREAM_RATE_LIMITED'); },
+    }),
+  });
+  const task = service.generate('test', context);
+  const events: SseEvent[] = [];
+  task.subscribe((event) => events.push(event));
+  const outcome = await task.result;
+  assert.equal(outcome.ok, false);
+  assert.equal(events.at(-1)?.event, 'generation_error');
+  await tick();
+  // Every node fails its first call and then waits; the timeout aborts the backoff before any retry.
+  assert.equal(calls, fixture.nodes.length);
 });
 
 test('overall timeout cancels active work, drops queued work, and releases slots and records', async () => {
@@ -293,8 +354,8 @@ test('overall timeout cancels active work, drops queued work, and releases slots
   const result = await task.result;
   assert.equal(result.ok, false);
   await tick();
-  assert.equal(aborted, 5);
-  assert.equal(calls, 5);
+  assert.equal(aborted, DEFAULT_SEARCH_CONCURRENCY);
+  assert.equal(calls, DEFAULT_SEARCH_CONCURRENCY);
   assert.equal(events.filter((e) => e.event === 'generation_error').length, 1);
   assert.equal(events.filter((e) => e.event === 'complete').length, 0);
   assert.equal(events.at(-1)?.event, 'generation_error');
@@ -303,7 +364,7 @@ test('overall timeout cancels active work, drops queued work, and releases slots
   const next = service.generate('test', context);
   assert.notEqual(next.mapId, task.mapId);
   assert.ok((await next.result).ok);
-  assert.equal(calls, 11);
+  assert.equal(calls, DEFAULT_SEARCH_CONCURRENCY + fixture.nodes.length);
 });
 
 test('outline timeout removes abandoned task and ignores late success', async () => {
@@ -618,7 +679,7 @@ test('adapter propagates caller cancellation without leaking the reason or start
 });
 
 test('failed search releases scheduler slots and queued cancellation never starts work', async () => {
-  const scheduler = new SearchScheduler();
+  const scheduler = new SearchScheduler(5);
   const active = new AbortController();
   const gate = deferred<void>();
   let starts = 0;

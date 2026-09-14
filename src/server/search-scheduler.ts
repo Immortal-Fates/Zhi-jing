@@ -1,8 +1,22 @@
 import { fail } from './api-errors.ts';
 
+// Zhihu search rejects bursts above two concurrent calls with UPSTREAM_RATE_LIMITED.
+export const DEFAULT_SEARCH_CONCURRENCY = 2;
+
+function configuredConcurrency(): number {
+  const value = Number(process.env.ZHIJING_SEARCH_CONCURRENCY);
+  return Number.isSafeInteger(value) && value > 0 && value <= 8 ? value : DEFAULT_SEARCH_CONCURRENCY;
+}
+
 export class SearchScheduler {
   private active = 0;
   private readonly queue: Array<() => void> = [];
+  private readonly limit: number;
+
+  constructor(limit: number = configuredConcurrency()) {
+    if (!Number.isSafeInteger(limit) || limit < 1) fail('UPSTREAM_ERROR');
+    this.limit = limit;
+  }
 
   async run<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T> {
     await new Promise<void>((resolve, reject) => {
@@ -19,7 +33,7 @@ export class SearchScheduler {
       };
       if (signal.aborted) {
         abort();
-      } else if (this.active < 5) {
+      } else if (this.active < this.limit) {
         start();
       } else {
         this.queue.push(start);

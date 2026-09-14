@@ -48,6 +48,22 @@ interface ServiceOptions {
   idFactory?: () => string;
   timeoutMs?: number;
   ttlMs?: number;
+  retryDelayMs?: number;
+}
+
+const SEARCH_ATTEMPTS = 3;
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
 }
 
 // API route bundles in the same process must use the same search budget.
@@ -122,6 +138,7 @@ export class MapGenerationService {
   private readonly idFactory: () => string;
   private readonly timeoutMs: number;
   private readonly ttlMs: number;
+  private readonly retryDelayMs: number;
 
   constructor(options: ServiceOptions = {}) {
     this.clientFactory = options.clientFactory ?? ((context) => createZhihuClient(context));
@@ -130,8 +147,10 @@ export class MapGenerationService {
     this.idFactory = options.idFactory ?? randomUUID;
     this.timeoutMs = options.timeoutMs ?? 180_000;
     this.ttlMs = options.ttlMs ?? 86_400_000;
+    this.retryDelayMs = options.retryDelayMs ?? 700;
     if (![this.timeoutMs, this.ttlMs].every((n) =>
       Number.isSafeInteger(n) && n > 0 && n <= 2_147_483_647)) fail('UPSTREAM_ERROR');
+    if (!Number.isSafeInteger(this.retryDelayMs) || this.retryDelayMs < 0) fail('UPSTREAM_ERROR');
   }
 
   getCached(topic: unknown, context: GenerationContext): KnowledgeMap | undefined {
@@ -185,7 +204,7 @@ export class MapGenerationService {
     return this.bounded(async (signal) => {
       const client = this.clientFactory(context);
       client.checkConfiguration?.();
-      const result = await this.scheduler.run(() => client.search(query, 10, signal), signal);
+      const result = await this.search(client, query, signal);
       const resources = rankResources(result.resources);
       return {
         ok: true, mockMode: context.mockMode, nodeId,
@@ -193,6 +212,22 @@ export class MapGenerationService {
         weight: resources.reduce((sum, resource) => sum + resource.score, 0),
       };
     });
+  }
+
+  // Zhihu search rejects short bursts, so rate-limited nodes back off instead of failing the map.
+  private async search(
+    client: GenerationClient, query: string, signal: AbortSignal,
+  ): Promise<ZhihuSearchResult> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.scheduler.run(() => client.search(query, 10, signal), signal);
+      } catch (error) {
+        if (signal.aborted || attempt >= SEARCH_ATTEMPTS ||
+          safeError(error).code !== 'UPSTREAM_RATE_LIMITED') throw error;
+        await sleep(this.retryDelayMs * attempt, signal);
+        if (signal.aborted) throw error;
+      }
+    }
   }
 
   private async bounded<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -270,7 +305,7 @@ export class MapGenerationService {
       this.emit(task, { event: 'outline', data: { ...outline, ...identity, nodes, progressScope: scope } });
       await Promise.all(nodes.map(async (node) => {
         try {
-          const result = await this.scheduler.run(() => client.search(node.query, 10, signal), signal);
+          const result = await this.search(client, node.query, signal);
           if (task.finished) return;
           node.resources = rankResources(result.resources);
           node.weight = node.resources.reduce((sum, r) => sum + r.score, 0);
