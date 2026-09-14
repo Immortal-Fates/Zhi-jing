@@ -48,7 +48,7 @@ ZHIHU_ACCESS_SECRET=<知乎数据开放平台 Access Secret>
 ZHIJING_MOCK_MODE=false
 ZHIHU_API_BASE_URL=https://developer.zhihu.com
 ZHIJING_MAP_TTL_SECONDS=86400
-ZHIJING_SEARCH_CONCURRENCY=5
+ZHIJING_SEARCH_CONCURRENCY=2
 ZHIJING_GENERATION_TIMEOUT_MS=180000
 ```
 
@@ -97,7 +97,7 @@ curl 'http://127.0.0.1:4173/api/map?topic=%E5%BE%AE%E7%A7%AF%E5%88%86'
 
 开发服务的 `ZHIJING_MOCK_SCENARIO` 可选择适配层已有场景，默认 `default`；`empty` 用于完整空资源地图，其余错误可验证终止流。该配置只由服务器设置，请求体不能覆盖，修改后重启服务。
 
-共享任务在所有订阅者断开后继续。总超时默认 180 秒（`ZHIJING_GENERATION_TIMEOUT_MS`），超时取消上游并清理记录；搜索进程共享上限 5。完整缓存 TTL 默认 24 小时（`ZHIJING_MAP_TTL_SECONDS`），最多 100 张，失败/partial 不缓存；不同模式和 mock 场景隔离。缓存仅在进程内，重启、热更新或多实例之间不保证共享。
+共享任务在所有订阅者断开后继续。总超时默认 180 秒（`ZHIJING_GENERATION_TIMEOUT_MS`），超时取消上游并清理记录。搜索进程共享并发上限默认 2（`ZHIJING_SEARCH_CONCURRENCY`，允许 1–8）；知乎搜索接口对瞬时并发敏感，实测并发 2 稳定、并发 3 起就会返回 `UPSTREAM_RATE_LIMITED`，请勿随意调高。被限流的节点会退避重试，最多 3 次尝试（间隔约 0.7 秒递增），退避期间受总超时约束；其他错误码不重试。完整缓存 TTL 默认 24 小时（`ZHIJING_MAP_TTL_SECONDS`），最多 100 张，失败/partial 不缓存；不同模式和 mock 场景隔离。缓存仅在进程内，重启、热更新或多实例之间不保证共享。
 
 mapId 是生成版本，progressScope 是稳定学习话题作用域，不能用前者代替 localStorage 进度 ID。完整请求/响应、SSE 终止语义与限制见 `docs/api-contract.md`。
 
