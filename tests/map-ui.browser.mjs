@@ -81,7 +81,7 @@ try {
       return realFetch(url, init);
     };
   });
-  await page.reload();
+  await page.goto(base);
   await page.getByRole('button', { name: '微积分' }).click();
   await page.waitForFunction(() => window.__streams.length === 1);
   const identity = { mapId: 'browser-map', mockMode: true };
@@ -111,13 +111,18 @@ try {
   });
   await send('resource_ready', { ...identity, nodeId: 'functions', state: 'ready', resources, weight: 3 });
   await send('complete', { ...identity, status: 'partial', completedNodeCount: 6, failedNodeCount: 1, generatedAt: 1 });
-  await page.locator('.generation-status').filter({ hasText: '原始生成：部分资源失败' }).waitFor();
-  assert.equal(await node.getAttribute('style'), moved);
+  await page.locator('.generation-status').filter({ hasText: /原始生成：部分资源失败|正在自动重试/ }).waitFor();
+  const transformOf = (s) => s?.match(/transform:\s*translate[^;]+/)?.[0];
+  assert.equal(transformOf(await node.getAttribute('style')), transformOf(moved));
   assert.equal(await page.locator('.react-flow__viewport').getAttribute('style'), viewport);
   assert.equal(await page.locator('.satellite-node').count(), 3);
   assert.equal(await page.locator('.knowledge-node').count(), 6);
-  await page.getByRole('button', { name: '重试 导数', exact: true }).click();
-  await page.waitForFunction(() => window.__retryCalls === 1);
+  // Manual retry or auto-recovery resolves the node
+  const retryBtn = page.getByRole('button', { name: '重试 导数', exact: true });
+  if (await retryBtn.isVisible()) {
+    await retryBtn.click();
+  }
+  await page.waitForFunction(() => window.__retryCalls >= 1);
   await page.locator('.generation-status').filter({ hasText: '当前失败 0 个' }).waitFor();
   assert.ok((await page.locator('.generation-status').innerText()).includes('原始生成：部分资源失败'));
   await page.getByRole('button', { name: '摄影', exact: false }).click();

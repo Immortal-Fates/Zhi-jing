@@ -3,14 +3,18 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Background, BackgroundVariant, Handle, MarkerType, Position, ReactFlow,
-  ReactFlowProvider, useReactFlow, type Node, type NodeProps, type Edge, type Viewport,
+  ReactFlowProvider, useReactFlow, type BezierPathOptions, type Node, type NodeProps, type Edge,
+  type Viewport,
 } from '@xyflow/react';
 import {
   ArrowRight, BookOpen, Check, ChevronDown, Compass, ExternalLink, Focus,
   LoaderCircle, MessageCircle, Minus, Plus, RotateCcw, Search, ThumbsUp, X, GitBranch, Trash2,
 } from 'lucide-react';
 import type { MapNode, Resource } from '../../types/domain';
-import { MapController, nodeRadius, safeResourceUrl, type MapView } from './map-controller';
+import {
+  animatedNodeLayout, CARD, MapController, mapLayout, nodeRadius, safeResourceUrl,
+  SATELLITE, SATELLITE_RESERVE, satelliteOpensLeft, satelliteStackPositions, type MapView,
+} from './map-controller';
 import { ProgressStore, PROGRESS_KEY, progressId } from './learning-progress';
 import { MapNavigation } from './map-navigation';
 import '@xyflow/react/dist/style.css';
@@ -26,6 +30,7 @@ type ResourceData = { resource: Resource; mockMode: boolean; order: number; mark
 type KnowledgeFlowNode = Node<KnowledgeData, 'knowledge'>;
 type ResourceFlowNode = Node<ResourceData, 'resource'>;
 type BoardNode = KnowledgeFlowNode | ResourceFlowNode;
+type CurvedEdge = Edge & { pathOptions?: BezierPathOptions };
 
 interface CanvasMemory {
   positions: Map<string, { x: number; y: number }>;
@@ -41,57 +46,71 @@ function KnowledgeNode({ data }: NodeProps<KnowledgeFlowNode>) {
   const loading = node.state === 'pending' || node.state === 'retrying';
   const canRetry = (node.state === 'empty' || node.state === 'error') && node.error?.retryable !== false;
   const diameter = nodeRadius(node.weight) * 2;
-  return <article className={`knowledge-node level-${node.level} state-${node.state}${data.learned ? ' is-learned' : ''}`}
+  return <article className={`knowledge-node level-${node.level} state-${node.state}${expanded ? ' summary-expanded' : ''}${data.learned ? ' is-learned' : ''}`}
     data-state={node.state} data-learned={data.learned}>
-    <Handle type="target" position={Position.Left} />
-    <div className="node-topline"><span>{levelNames[node.level - 1]}</span><span>{String(node.level).padStart(2, '0')}</span></div>
+    <Handle id="left" type="target" position={Position.Left} />
+    <Handle id="left-out" type="source" position={Position.Left} />
+    <Handle id="top-in" type="target" position={Position.Top} />
+    <Handle id="top-out" type="source" position={Position.Top} />
+    <div className="node-topline"><span>{levelNames[node.level - 1]}</span><span>{node.resources.length} 篇</span></div>
     <button id={nodeElementId(node.id)} className="node-open nodrag" type="button"
       aria-label={`${node.title}，${stateNames[node.state]}${data.learned ? '，已学' : ''}`} aria-expanded={expanded}
       onClick={() => open(node.id)} disabled={node.state === 'pending'}>
       <span className="node-orbit" style={{ width: diameter, height: diameter }} aria-hidden="true">
-        {loading ? <LoaderCircle className="spin" size={26} /> :
-          node.state === 'ready' ? <BookOpen size={27} strokeWidth={1.5} /> :
-            node.state === 'empty' ? <Search size={26} /> : <RotateCcw size={26} />}
-        <span>{node.resources.length.toString().padStart(2, '0')}</span>
-        {data.learned && <span className="learned-badge"><Check size={16} /></span>}
+        {loading ? <LoaderCircle className="spin" size={19} /> :
+          node.state === 'ready' ? <BookOpen size={20} strokeWidth={1.6} /> :
+            node.state === 'empty' ? <Search size={19} /> : <RotateCcw size={19} />}
+        {data.learned && <span className="learned-badge"><Check size={12} /></span>}
       </span>
-      <span className="node-title">{node.title}</span>
-      <span className="node-summary">{node.summary}</span>
+      <span className="node-text">
+        <span className="node-title">{node.title}</span>
+        <span className="node-summary">{node.summary}</span>
+      </span>
     </button>
     <div className="node-footer">
       <span>{data.learned ? '已学 · ' : ''}{stateNames[node.state]}</span>
       {data.drill && <button type="button" className="icon-button nodrag"
         title="以此为中心展开" aria-label={`下钻 ${node.title}`} onClick={() => data.drill?.(node.id)}>
-        <GitBranch size={15} /></button>}
+        <GitBranch size={14} /></button>}
       {canRetry ? <button type="button" className="icon-button nodrag" aria-label={`重试 ${node.title}`} title="重试资源"
-        onClick={() => retry(node.id)}><RotateCcw size={15} /></button> :
-        <ChevronDown size={15} className={expanded ? 'expanded-chevron' : ''} aria-hidden="true" />}
+        onClick={() => retry(node.id)}><RotateCcw size={14} /></button> :
+        <ChevronDown size={14} className={expanded ? 'expanded-chevron' : ''} aria-hidden="true" />}
     </div>
-    <Handle type="source" position={Position.Right} />
+    <Handle id="right" type="source" position={Position.Right} />
+    <Handle id="bottom-in" type="target" position={Position.Bottom} />
+    <Handle id="bottom-out" type="source" position={Position.Bottom} />
   </article>;
 }
 
-function ResourceContent({ resource, mockMode, order, mark }: ResourceData) {
+function ResourceCard({ resource, mockMode, order, mark }: ResourceData) {
   const url = safeResourceUrl(resource.url, mockMode);
-  return <>
-    <div className="resource-eyebrow"><span>{mockMode ? '示例资源 · 非真实文章' : '来源：知乎'}</span><span>0{order + 1}</span></div>
-    <h3>{resource.title}</h3>
-    <p className="resource-author">{resource.author}</p>
-    <div className="resource-bottom">
-      <span title="赞同"><ThumbsUp size={13} />{resource.voteUpCount}</span>
-      <span title="评论"><MessageCircle size={13} />{resource.commentCount}</span>
-      {url ? <a className="resource-link nodrag" href={url} target="_blank" rel="noopener noreferrer"
-        onClick={mark} onAuxClick={(event) => { if (event.button === 1) mark(); }}
-        aria-label={`打开知乎原文：${resource.title}`} title="打开知乎原文"><ExternalLink size={16} /></a> :
-        <span className="resource-disabled">{mockMode ? '仅供演示' : '链接不可用'}</span>}
-    </div>
+  const body = <>
+    <span className="resource-eyebrow">
+      <span>{mockMode ? '示例资源 · 非真实文章' : '来源：知乎'}</span>
+      <span>{String(order + 1).padStart(2, '0')}</span>
+    </span>
+    <span className="resource-title">{resource.title}</span>
+    <span className="resource-author">{resource.author}</span>
+    <span className="resource-bottom">
+      <span title="赞同"><ThumbsUp size={12} />{resource.voteUpCount}</span>
+      <span title="评论"><MessageCircle size={12} />{resource.commentCount}</span>
+      <span className="resource-cta">
+        {url ? <>阅读原文<ExternalLink size={13} /></> : mockMode ? '仅供演示' : '链接不可用'}
+      </span>
+    </span>
   </>;
+  // The whole card is the link target, so nested interactive elements must not be added here.
+  return url ? <a className="resource-card nodrag" href={url} target="_blank" rel="noopener noreferrer"
+    onClick={mark} onAuxClick={(event) => { if (event.button === 1) mark(); }}
+    aria-label={`打开知乎原文：${resource.title}`} title="打开知乎原文">{body}</a> :
+    <span className="resource-card is-inactive">{body}</span>;
 }
 
 function SatelliteNode({ data }: NodeProps<ResourceFlowNode>) {
   return <article className="satellite-node nodrag">
-    <Handle type="target" position={Position.Left} />
-    <ResourceContent {...data} />
+    <Handle id="left" type="target" position={Position.Left} />
+    <Handle id="right" type="target" position={Position.Right} />
+    <ResourceCard {...data} />
   </article>;
 }
 const nodeTypes = { knowledge: KnowledgeNode, resource: SatelliteNode };
@@ -130,7 +149,7 @@ function ResourceDrawer({ node, mockMode, close, retry, mark, drill }: {
     <p className="drawer-summary">{node.summary}</p>
     {node.resources.length ? node.resources.slice(0, 3).map((resource, order) =>
       <article className="drawer-resource" key={`${resource.contentType}:${resource.contentId}`}>
-        <ResourceContent resource={resource} mockMode={mockMode} order={order} mark={mark} />
+        <ResourceCard resource={resource} mockMode={mockMode} order={order} mark={mark} />
       </article>) : <p role="status">{node.state === 'empty' ? '社区暂无优质资料' : node.error?.message ?? stateNames[node.state]}</p>}
     {(node.state === 'empty' || node.state === 'error') && node.error?.retryable !== false &&
       <button className="text-button" type="button" onClick={retry}><RotateCcw size={16} />重试资源</button>}
@@ -138,6 +157,47 @@ function ResourceDrawer({ node, mockMode, close, retry, mark, drill }: {
     {drill && <button type="button" className="text-button drawer-drill" onClick={drill}>
       <GitBranch size={16} />以此为中心展开</button>}
   </dialog>;
+}
+
+function useExpansionProgress(expandedId: string | undefined): number {
+  const [progress, setProgress] = useState(expandedId ? 1 : 0);
+  const animRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const prefersReduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (prefersReduced) {
+      setProgress(expandedId ? 1 : 0);
+      return;
+    }
+
+    const start = performance.now();
+    const duration = 200; // ms
+    const initial = progress;
+    const target = expandedId ? 1 : 0;
+    if (Math.abs(initial - target) < 0.01) return;
+
+    const tick = (now: number) => {
+      const elapsed = now - start;
+      const t = Math.min(1, elapsed / duration);
+      // quadratic ease-out
+      const eased = 1 - (1 - t) * (1 - t);
+      const current = initial + (target - initial) * eased;
+      setProgress(current);
+      if (t < 1) {
+        animRef.current = requestAnimationFrame(tick);
+      } else {
+        setProgress(target);
+      }
+    };
+
+    animRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (animRef.current !== null) cancelAnimationFrame(animRef.current);
+    };
+  }, [expandedId]);
+
+  return progress;
 }
 
 function Canvas({ view, controller, narrow, memory, completed, mark, drill }: {
@@ -148,19 +208,35 @@ function Canvas({ view, controller, narrow, memory, completed, mark, drill }: {
   const [positions, setPositions] = useState(() => memory.positions);
   const [expanded, setExpanded] = useState<string | undefined>(memory.expanded);
   const fitOnce = useRef(!!memory.viewport);
-  const [initial] = useState(() => {
-    const rows = [0, 0, 0];
-    return Object.fromEntries(view.nodes.map((node) => [
-      node.id, { x: (node.level - 1) * 550, y: rows[node.level - 1]++ * 450 },
-    ]));
-  });
+  const [initial] = useState(() => mapLayout(view.nodes).positions);
+  const progress = useExpansionProgress(narrow ? undefined : expanded);
+
+  const basePositions = useMemo(() => {
+    const map: Record<string, { x: number; y: number }> = {};
+    for (const node of view.nodes) {
+      map[node.id] = positions.get(node.id) ?? initial[node.id];
+    }
+    return map;
+  }, [view.nodes, positions, initial]);
+
+  const { positions: animatedPositions, heights: animatedHeights } = useMemo(() => {
+    return animatedNodeLayout(view.nodes, basePositions, narrow ? undefined : expanded, progress);
+  }, [view.nodes, basePositions, narrow, expanded, progress]);
+
   const fit = () => {
     const points = view.nodes.map((node) => positions.get(node.id) ?? initial[node.id]);
-    const left = Math.min(...points.map((point) => point.x)) - 35;
-    const top = Math.min(...points.map((point) => point.y)) - 40;
-    const right = Math.max(...points.map((point) => point.x)) + (narrow ? 235 : 485);
-    const bottom = Math.max(...points.map((point) => point.y)) + 515;
-    void flow.fitBounds({ x: left, y: top, width: right - left, height: bottom - top }, { padding: 0.08 });
+    const left = Math.min(...points.map((point) => point.x));
+    const right = Math.max(...points.map((point) => point.x)) + CARD.width;
+    // Satellites always stay inside the column gap, but they are taller than a card, so the fitted
+    // view reserves that height up front and expanding a node never has to move the viewport.
+    const reserve = narrow ? 0 : SATELLITE_RESERVE;
+    const top = Math.min(...points.map((point) => point.y)) - reserve;
+    const bottom = Math.max(...points.map((point) => point.y)) + CARD.height + reserve;
+    const margin = 30;
+    void flow.fitBounds({
+      x: left - margin, y: top - margin,
+      width: right - left + 2 * margin, height: bottom - top + 2 * margin,
+    }, { padding: 0.01 });
   };
   const focusNode = (id?: string) => {
     if (id) requestAnimationFrame(() => document.getElementById(nodeElementId(id))?.focus({ preventScroll: true }));
@@ -176,49 +252,77 @@ function Canvas({ view, controller, narrow, memory, completed, mark, drill }: {
     node.state === 'ready' || node.state === 'empty' || (node.state === 'error' && view.originalStatus === 'partial')
   );
   const nodes = useMemo<BoardNode[]>(() => {
-    const result: BoardNode[] = view.nodes.map((node) => ({
-      id: node.id, type: 'knowledge', position: positions.get(node.id) ?? initial[node.id],
-      data: { node, expanded: expanded === node.id, mockMode: view.mockMode ?? true,
-        learned: !!view.progressScope && completed.includes(progressId(view.topic, node.id, view.progressScope)),
-        drill: canDrill(node) ? drill : undefined,
-        open, retry: (id) => { void controller.retry(id); } },
-      width: 200, height: 350, measured: { width: 200, height: 350 },
-      style: { width: 200, height: 350 }, selectable: false, zIndex: 2,
-      ariaLabel: node.title,
-    }));
+    const result: BoardNode[] = view.nodes.map((node) => {
+      const height = animatedHeights[node.id] ?? CARD.height;
+      const pos = animatedPositions[node.id] ?? basePositions[node.id];
+      return {
+        id: node.id, type: 'knowledge', position: pos,
+        data: { node, expanded: expanded === node.id, mockMode: view.mockMode ?? true,
+          learned: !!view.progressScope && completed.includes(progressId(view.topic, node.id, view.progressScope)),
+          drill: canDrill(node) ? drill : undefined,
+          open, retry: (id) => { void controller.retry(id); } },
+        width: CARD.width, height, measured: { width: CARD.width, height },
+        style: { width: CARD.width, height }, selectable: false, zIndex: 2,
+        ariaLabel: node.title,
+      };
+    });
     const selected = view.nodes.find((node) => node.id === expanded);
     if (!narrow && selected) {
-      const position = positions.get(selected.id) ?? initial[selected.id];
-      selected.resources.slice(0, 3).forEach((resource, order) => {
+      const anchor = animatedPositions[selected.id] ?? basePositions[selected.id];
+      const items = selected.resources.slice(0, 3);
+      const stack = satelliteStackPositions(anchor, selected.level, items);
+      items.forEach((resource, order) => {
+        const { x, y, height } = stack[order];
         result.push({
           id: JSON.stringify(['resource', selected.id, order]), type: 'resource',
-          position: { x: position.x + 235, y: position.y + order * 172 },
+          position: { x, y },
           data: { resource, order, mockMode: view.mockMode ?? true, mark: () => mark(selected.id) }, draggable: false,
-          selectable: false, width: 230, height: 152, measured: { width: 230, height: 152 },
-          style: { width: 230, height: 152, pointerEvents: 'all' }, zIndex: 3,
+          selectable: false, width: SATELLITE.width, height,
+          measured: { width: SATELLITE.width, height },
+          style: { width: SATELLITE.width, height, pointerEvents: 'all' }, zIndex: 3,
         });
       });
     }
     return result;
-  }, [view.nodes, view.mockMode, positions, initial, expanded, narrow, controller, completed, mark, drill, view.progressScope, view.topic, view.originalStatus]);
-  const edges = useMemo<Edge[]>(() => {
-    const result: Edge[] = view.edges.map((edge, index) => ({
-      id: `edge-${index}`, source: edge.from, target: edge.to, type: 'smoothstep',
-      markerEnd: { type: MarkerType.ArrowClosed, color: edge.type === 'main' ? '#748579' : '#a5aba7' },
-      style: { stroke: edge.type === 'main' ? '#748579' : '#a5aba7',
-        strokeWidth: edge.type === 'main' ? 2 : 1, strokeDasharray: edge.type === 'branch' ? '5 5' : undefined },
-    }));
+  }, [view.nodes, view.mockMode, animatedPositions, animatedHeights, basePositions, expanded, narrow, controller, completed, mark, drill, view.progressScope, view.topic, view.originalStatus]);
+  const edges = useMemo<CurvedEdge[]>(() => {
+    const geometry = new Map(view.nodes.map((node) =>
+      [node.id, { level: node.level, y: animatedPositions[node.id]?.y ?? 0 }]));
+    const result: CurvedEdge[] = view.edges.map((edge, index) => {
+      const main = edge.type === 'main';
+      const color = main ? '#6f8a78' : '#a8b0ab';
+      const from = geometry.get(edge.from);
+      const to = geometry.get(edge.to);
+      // Same-column edges must leave vertically, otherwise they loop back around the card.
+      const vertical = !!from && !!to && from.level === to.level;
+      const downward = !from || !to || from.y <= to.y;
+      return {
+        id: `edge-${index}`, source: edge.from, target: edge.to, type: 'default',
+        sourceHandle: vertical ? (downward ? 'bottom-out' : 'top-out') : 'right',
+        targetHandle: vertical ? (downward ? 'top-in' : 'bottom-in') : 'left',
+        pathOptions: { curvature: vertical ? 0.8 : main ? 0.42 : 0.3 },
+        markerEnd: { type: MarkerType.ArrowClosed, color, width: 15, height: 15 },
+        style: {
+          stroke: color, strokeWidth: main ? 1.9 : 1.3, strokeLinecap: 'round',
+          strokeDasharray: main ? undefined : '6 6', opacity: main ? 0.85 : 0.6,
+        },
+      };
+    });
     if (!narrow && expanded) {
       const node = view.nodes.find((node) => node.id === expanded);
+      const opensLeft = !!node && satelliteOpensLeft(node.level);
       node?.resources.slice(0, 3).forEach((_, order) => {
         result.push({
           id: `satellite-edge-${order}`, source: expanded, target: JSON.stringify(['resource', expanded, order]),
-          type: 'smoothstep', style: { stroke: '#aaa69d', strokeWidth: 1, strokeDasharray: '3 4' },
+          type: 'default', pathOptions: { curvature: 0.55 },
+          sourceHandle: opensLeft ? 'left-out' : 'right',
+          targetHandle: opensLeft ? 'right' : 'left',
+          style: { stroke: '#b3bab2', strokeWidth: 1.2, strokeDasharray: '2 5', strokeLinecap: 'round' },
         });
       });
     }
     return result;
-  }, [view.edges, view.nodes, expanded, narrow]);
+  }, [view.edges, view.nodes, expanded, narrow, animatedPositions]);
 
   useEffect(() => {
     if (fitOnce.current || !view.mapId) return;
@@ -243,7 +347,14 @@ function Canvas({ view, controller, narrow, memory, completed, mark, drill }: {
       onNodesChange={(changes) => {
         setPositions((previous) => {
           const next = new Map(previous);
-          for (const change of changes) if (change.type === 'position' && change.position) next.set(change.id, change.position);
+          for (const change of changes) {
+            if (change.type === 'position' && change.position) {
+              const currentAnim = animatedPositions[change.id];
+              const currentBase = basePositions[change.id];
+              const offsetY = (currentAnim && currentBase) ? currentAnim.y - currentBase.y : 0;
+              next.set(change.id, { x: change.position.x, y: change.position.y - offsetY });
+            }
+          }
           memory.positions = next;
           return next;
         });
@@ -383,6 +494,7 @@ export default function MapBoard() {
     </section>
     <div className="generation-status" role="status" aria-live="polite">
       {busy ? <><LoaderCircle size={15} className="spin" />{view.drilldown ? '下钻：' : ''}{view.phase === 'loading' ? '正在生成学习大纲…' : `正在检索资源 · ${settled}/${view.nodes.length}`}</> :
+        view.recovering ? <><LoaderCircle size={15} className="spin" />正在自动重试失败的知识点 · 剩 {errors} 个</> :
         view.phase === 'finished' ? <><Check size={15} />{view.originalStatus === 'partial' ? '原始生成：部分资源失败' : '地图已生成'}
           <span>当前失败 {errors} 个</span></> : view.phase === 'idle' ? <><BookOpen size={15} />从一个话题开始</> : null}
     </div>
